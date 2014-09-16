@@ -24,3 +24,7 @@ log/
 
 # ignore Mac OS dir files
 .DS_Store
+
+# ignore logs and models
+*.log
+*.th7

@@ -8,6 +8,7 @@ mnist.path_dataset = 'mnist-th7'
 mnist.path_trainset = paths.concat(mnist.path_dataset, 'train.th7')
 mnist.path_testset = paths.concat(mnist.path_dataset, 'test.th7')
 
+-- download and untar
 function mnist.download()
    if not paths.filep(mnist.path_trainset) or not paths.filep(mnist.path_testset) then
       local remote = mnist.path_remote
@@ -30,6 +31,7 @@ function mnist.loadFlatDataset(fileName, maxLoad)
    local f = torch.DiskFile(fileName, 'r')
    f:binary()
 
+   -- read examples & dim
    local nExample = f:readInt()
    local dim = f:readInt()
    if maxLoad and maxLoad > 0 and maxLoad < nExample then
@@ -45,18 +47,23 @@ function mnist.loadFlatDataset(fileName, maxLoad)
    dataset.tensor = tensor
 
    function dataset:normalize(mean_, std_)
+      -- narrow dimension 2 of the tensor. seems to cut off the
+      -- intercept term
       local data = tensor:narrow(2, 1, dim-1)
       local std = std_ or torch.std(data, 1, true)
       local mean = mean_ or torch.mean(data, 1)
       for i=1,dim-1 do
+         -- select a dimension
          tensor:select(2, i):add(-mean[1][i])
          if std[1][i] > 0 then
+            -- multiply by 1.0/std
             tensor:select(2, i):mul(1/std[1][i])
          end
       end
       return mean, std
    end
 
+   -- globally normalize the data
    function dataset:normalizeGlobal(mean_, std_)
       local data = tensor:narrow(2, 1, dim-1)
       local std = std_ or data:std()
@@ -68,12 +75,14 @@ function mnist.loadFlatDataset(fileName, maxLoad)
 
    dataset.dim = dim-1
 
+   -- size returns the number of examples
    function dataset:size()
       return nExample
    end
 
    local labelvector = torch.zeros(10)
 
+   -- now each index of the data set returns an example
    setmetatable(dataset, {__index = function(self, index)
                                        local input = tensor[index]:narrow(1, 1, dim-1)
                                        local class = tensor[index][dim]+1
@@ -86,10 +95,12 @@ function mnist.loadFlatDataset(fileName, maxLoad)
    return dataset
 end
 
+-- this considers the gemoetry of the digits, i.e., width & height
 function mnist.loadConvDataset(fileName, maxLoad, geometry)
    local dataset = mnist.loadFlatDataset(fileName, maxLoad)
+   -- convolutional data set
    local cdataset = {}
-   
+
    function cdataset:normalize(m,s)
       return dataset:normalize(m,s)
    end
@@ -109,12 +120,15 @@ function mnist.loadConvDataset(fileName, maxLoad, geometry)
                                        local input = ex[1]
                                        local label = ex[2]
                                        local w = math.sqrt(input:nElement())
+                                       -- just transpose?
                                        local uinput = input:unfold(1,input:nElement(),input:nElement())
+                                       -- make s square of size (1, w, w)
                                        local cinput = uinput:unfold(2,w,w)
                                        local h = cinput:size(2)
                                        local w = cinput:size(3)
                                        local x = math.floor((iwidth-w)/2)+1
                                        local y = math.floor((iheight-h)/2)+1
+                                       -- copy to the center of inputpatch
                                        inputpatch:narrow(3,x,w):narrow(2,y,h):copy(cinput)
                                        local example = {inputpatch, label}
                                        return example

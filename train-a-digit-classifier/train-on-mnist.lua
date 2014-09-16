@@ -47,7 +47,7 @@ torch.manualSeed(1)
 
 -- threads
 torch.setnumthreads(opt.threads)
-print('<torch> set nb of threads to ' .. torch.getnumthreads())
+print('<torch> set number of threads to ' .. torch.getnumthreads())
 
 -- use floats, for SGD
 if opt.optimization == 'SGD' then
@@ -277,10 +277,10 @@ function train(dataset)
    trainLogger:add{['% mean class accuracy (train set)'] = confusion.totalValid * 100}
    confusion:zero()
 
-   -- save/log current net
+   -- save/log current net (for every epoch)
    local filename = paths.concat(opt.save, 'mnist.net')
    os.execute('mkdir -p ' .. sys.dirname(filename))
-   if sys.filep(filename) then
+   if paths.filep(filename) then
       os.execute('mv ' .. filename .. ' ' .. filename .. '.old')
    end
    print('<trainer> saving network to '..filename)
