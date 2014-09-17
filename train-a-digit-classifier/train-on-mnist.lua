@@ -15,6 +15,10 @@
 -- Clement Farabet
 ----------------------------------------------------------------------
 
+-- debugger
+local dbg = require("debugger")
+local json = require ("dkjson")
+
 require 'torch'
 require 'nn'
 require 'nnx'
@@ -40,6 +44,7 @@ local opt = lapp[[
    --coefL1           (default 0)           L1 penalty on the weights
    --coefL2           (default 0)           L2 penalty on the weights
    -t,--threads       (default 4)           number of threads
+   --stats            (default 1000)        log stats after processing some examples
 ]]
 
 -- fix seed
@@ -160,8 +165,13 @@ testData:normalizeGlobal(mean, std)
 confusion = optim.ConfusionMatrix(classes)
 
 -- log results to files
-trainLogger = optim.Logger(paths.concat(opt.save, 'train.log'))
-testLogger = optim.Logger(paths.concat(opt.save, 'test.log'))
+path_prefix = opt.save
+trainLogger = optim.Logger(paths.concat(path_prefix, 'train.log'))
+testLogger = optim.Logger(paths.concat(path_prefix, 'test.log'))
+statsLogger = assert(io.open(paths.concat(path_prefix, 'stats.log'), "w"))
+
+-- log options to file
+pretty.dump({opt=opt, arg=arg}, paths.concat(path_prefix, 'exp.config'))
 
 -- training function
 function train(dataset)
@@ -174,7 +184,14 @@ function train(dataset)
    -- do one epoch
    print('<trainer> on training set:')
    print("<trainer> online epoch # " .. epoch .. ' [batchSize = ' .. opt.batchSize .. ']')
+   local stats = {}
    for t = 1,dataset:size(),opt.batchSize do
+      -- log stats
+      if t % tonumber(opt.stats) == 1 then
+         -- the global variable detection here is funky
+         stats = {epoch = epoch + (t-1.0) / dataset:size()}
+      end
+
       -- create mini batch
       local inputs = torch.Tensor(opt.batchSize,1,geometry[1],geometry[2])
       local targets = torch.Tensor(opt.batchSize)
@@ -222,6 +239,27 @@ function train(dataset)
 
             -- Gradients:
             gradParameters:add( sign(parameters):mul(opt.coefL1) + parameters:clone():mul(opt.coefL2) )
+         end
+
+         -- pretty.dump(tablex.keys(model))
+         if t % opt.stats == 1 then
+            stats.f = f
+
+            local norm_gw = {}
+            for i=1,#model.modules do
+               norm_gw[i] = 0.0
+               -- don't calculate norm if there is no parameters (nil)
+               if model.modules[i]:parameters() then
+                  for j=1,#model.modules[i]:parameters() do
+                     norm_gw[i] = norm_gw[i] + torch.norm(model.modules[i]:parameters()[j])
+                  end
+               end
+            end
+
+            stats.grad_norm = norm_gw
+            statsLogger:write(json.encode (stats, { indent = true }))
+            statsLogger.write("\n\n")
+            statsLogger:flush()
          end
 
          -- update confusion
@@ -278,7 +316,7 @@ function train(dataset)
    confusion:zero()
 
    -- save/log current net (for every epoch)
-   local filename = paths.concat(opt.save, 'mnist.net')
+   local filename = paths.concat(path_prefix, 'mnist.net')
    os.execute('mkdir -p ' .. sys.dirname(filename))
    if paths.filep(filename) then
       os.execute('mv ' .. filename .. ' ' .. filename .. '.old')
