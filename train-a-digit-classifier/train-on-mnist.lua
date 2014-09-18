@@ -29,6 +29,18 @@ require 'pl'
 
 require 'yue'
 require 'torch_ext'
+
+---- logging ----
+require "logging"
+
+logger = logging.new(function(self, level, message)
+      local fname, line = debug.getinfo(2).source, debug.getinfo(2).linedefined
+      print(os.date(), '['..fname..':'..line..']', level, message)
+      return true
+end)
+logger:setLevel (logging.DEBUG)
+
+
 ----------------------------------------------------------------------
 -- parse command-line options
 --
@@ -47,6 +59,7 @@ local opt = lapp[[
    --coefL2           (default 0)           L2 penalty on the weights
    -t,--threads       (default 4)           number of threads
    --stats            (default 1000)        log stats after processing some examples
+   -e, --maxEpoch        (default 1000)        maximum number of epoches
 ]]
 
 -- fix seed
@@ -199,7 +212,7 @@ function train(dataset)
       -- log stats
       if t % tonumber(opt.stats) == 1 then
          tablex.clearall(stats)
-         stats.epoch = epoch + (t-1.0) / dataset:size()
+         stats.epoch = epoch - 1 + (t-1.0) / dataset:size()
 
 --[[
          -- get the parameters for the model
@@ -318,7 +331,6 @@ function train(dataset)
 
       -- pretty.dump(tablex.keys(model))
       if t % opt.stats == 1 then
-
          -- get the new output
          stats_state.new_output = model:getOutput(inputs)
 
@@ -346,7 +358,8 @@ function train(dataset)
          end
 
          -- log the stats iff we will not log it again for test
-         if t + opt.batchSize <= dataset:size() then
+         if (t + opt.batchSize <= dataset:size()) and (t + opt.stats <= dataset:size()) then
+            logger:info("logging t=%d", t)
             log_stats()
             tablex.clearall(stats)
          end
@@ -362,6 +375,7 @@ function train(dataset)
    -- print confusion matrix
    print(confusion)
    trainLogger:add{['% mean class accuracy (train set)'] = confusion.totalValid * 100}
+   assert(tablex.size(stats) > 0)
    stats.train_valid = confusion.totalValid
    confusion:zero()
 
@@ -428,7 +442,12 @@ end
 ----------------------------------------------------------------------
 -- and train!
 --
+epoch = epoch or 1
 while true do
+   if epoch > opt.maxEpoch then
+      break
+   end
+
    -- train/test
    train(trainData)
    -- make sure we haven't logged for the last time
