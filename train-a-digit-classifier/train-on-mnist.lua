@@ -1,10 +1,10 @@
 ----------------------------------------------------------------------
--- This script shows how to train different models on the MNIST 
+-- This script shows how to train different models on the MNIST
 -- dataset, using multiple optimization techniques (SGD, LBFGS)
 --
--- This script demonstrates a classical example of training 
+-- This script demonstrates a classical example of training
 -- well-known models (convnet, MLP, logistic regression)
--- on a 10-class classification problem. 
+-- on a 10-class classification problem.
 --
 -- It illustrates several points:
 -- 1/ description of the model
@@ -27,6 +27,8 @@ require 'image'
 require 'dataset-mnist'
 require 'pl'
 
+require 'yue'
+require 'torch_ext'
 ----------------------------------------------------------------------
 -- parse command-line options
 --
@@ -36,7 +38,7 @@ local opt = lapp[[
    -m,--model         (default "convnet")   type of model tor train: convnet | mlp | linear
    -f,--full                                use the full dataset
    -p,--plot                                plot while training
-   -o,--optimization  (default "SGD")       optimization: SGD | LBFGS 
+   -o,--optimization  (default "SGD")       optimization: SGD | LBFGS
    -r,--learningRate  (default 0.05)        learning rate, for SGD only
    -b,--batchSize     (default 10)          batch size
    -m,--momentum      (default 0)           momentum, for SGD only
@@ -79,7 +81,7 @@ if opt.network == '' then
 
    if opt.model == 'convnet' then
       ------------------------------------------------------------
-      -- convolutional network 
+      -- convolutional network
       ------------------------------------------------------------
       -- stage 1 : mean suppresion -> filter bank -> squashing -> max pooling
       model:add(nn.SpatialConvolutionMM(1, 32, 5, 5))
@@ -169,6 +171,8 @@ path_prefix = opt.save
 trainLogger = optim.Logger(paths.concat(path_prefix, 'train.log'))
 testLogger = optim.Logger(paths.concat(path_prefix, 'test.log'))
 statsLogger = assert(io.open(paths.concat(path_prefix, 'stats.log'), "w"))
+stats = {}
+stats_state = {}
 
 -- log options to file
 pretty.dump({opt=opt, arg=arg}, paths.concat(path_prefix, 'exp.config'))
@@ -184,12 +188,30 @@ function train(dataset)
    -- do one epoch
    print('<trainer> on training set:')
    print("<trainer> online epoch # " .. epoch .. ' [batchSize = ' .. opt.batchSize .. ']')
-   local stats = {}
    for t = 1,dataset:size(),opt.batchSize do
       -- log stats
       if t % tonumber(opt.stats) == 1 then
-         -- the global variable detection here is funky
-         stats = {epoch = epoch + (t-1.0) / dataset:size()}
+         tablex.clearall(stats)
+         stats.epoch = epoch + (t-1.0) / dataset:size()
+
+--[[
+         -- get the parameters for the model
+         stats_state.params = {}
+
+         for i=1,#model.modules do
+            stats_state.params[i] = {}
+            if model.modules[i]:parameters() then
+               for j=1,#model.modules[i]:parameters() do
+                  stats_state.params[i][j] = (
+                     model.modules[i]:parameters()[j]:clone())
+               end
+            end
+         end
+
+         if not stats_state.old_params then
+            stats_state.old_params = tablex.deepcopy(stats_state.params)
+         end
+]]--
       end
 
       -- create mini batch
@@ -205,6 +227,10 @@ function train(dataset)
          inputs[k] = input
          targets[k] = target
          k = k + 1
+      end
+
+      if t % tonumber(opt.stats) == 1 then
+         stats_state.old_output = model:getOutput(inputs)
       end
 
       -- create closure to evaluate f(X) and df/dX
@@ -241,27 +267,6 @@ function train(dataset)
             gradParameters:add( sign(parameters):mul(opt.coefL1) + parameters:clone():mul(opt.coefL2) )
          end
 
-         -- pretty.dump(tablex.keys(model))
-         if t % opt.stats == 1 then
-            stats.f = f
-
-            local norm_gw = {}
-            for i=1,#model.modules do
-               norm_gw[i] = 0.0
-               -- don't calculate norm if there is no parameters (nil)
-               if model.modules[i]:parameters() then
-                  for j=1,#model.modules[i]:parameters() do
-                     norm_gw[i] = norm_gw[i] + torch.norm(model.modules[i]:parameters()[j])
-                  end
-               end
-            end
-
-            stats.grad_norm = norm_gw
-            statsLogger:write(json.encode (stats, { indent = true }))
-            statsLogger.write("\n\n")
-            statsLogger:flush()
-         end
-
          -- update confusion
          for i = 1,opt.batchSize do
             confusion:add(outputs[i], targets[i])
@@ -280,7 +285,7 @@ function train(dataset)
             lineSearch = optim.lswolfe
          }
          optim.lbfgs(feval, parameters, lbfgsState)
-       
+
          -- disp report:
          print('LBFGS step')
          print(' - progress in batch: ' .. t .. '/' .. dataset:size())
@@ -296,15 +301,46 @@ function train(dataset)
             learningRateDecay = 5e-7
          }
          optim.sgd(feval, parameters, sgdState)
-      
+
          -- disp progress
          xlua.progress(t, dataset:size())
 
       else
          error('unknown optimization method')
       end
+
+      -- pretty.dump(tablex.keys(model))
+      if t % opt.stats == 1 then
+
+         -- get the new output
+         stats_state.new_output = model:getOutput(inputs)
+
+         -- get the norm of the gradient
+         stats.f = f
+         local norm_gw = {}
+         for i=1,#model.modules do
+            norm_gw[i] = 0.0
+            -- don't calculate norm if there is no parameters (nil)
+            if model.modules[i]:parameters() then
+               for j=1,#model.modules[i]:parameters() do
+                  norm_gw[i] = norm_gw[i] + torch.norm(model.modules[i]:parameters()[j])
+               end
+            end
+         end
+         stats.grad_norm = norm_gw
+
+         -- get the norm of the changes in the output
+         stats.norm_delta_output = {}
+         for i=1,#model.modules do
+            stats.norm_delta_output[i] = torch.norm(
+               torch.add(stats_state.new_output[i],
+                            -1, stats_state.old_output[i])
+            )
+         end
+      end
+
    end
-   
+
    -- time taken
    time = sys.clock() - time
    time = time / dataset:size()
@@ -313,6 +349,7 @@ function train(dataset)
    -- print confusion matrix
    print(confusion)
    trainLogger:add{['% mean class accuracy (train set)'] = confusion.totalValid * 100}
+   stats.train_valid = confusion.totalValid
    confusion:zero()
 
    -- save/log current net (for every epoch)
@@ -371,6 +408,7 @@ function test(dataset)
    -- print confusion matrix
    print(confusion)
    testLogger:add{['% mean class accuracy (test set)'] = confusion.totalValid * 100}
+   stats.test_valid = confusion.totalValid
    confusion:zero()
 end
 
@@ -381,6 +419,11 @@ while true do
    -- train/test
    train(trainData)
    test(testData)
+
+   -- log the stats
+   statsLogger:write(json.encode (stats, { indent = true }))
+   statsLogger:write("\n\n")
+   statsLogger:flush()
 
    -- plot errors
    if opt.plot then

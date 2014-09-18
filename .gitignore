@@ -29,3 +29,5 @@ log/
 experiments/
 *.log
 *.th7
+
+logs/
