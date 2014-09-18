@@ -177,6 +177,13 @@ stats_state = {}
 -- log options to file
 pretty.dump({opt=opt, arg=arg}, paths.concat(path_prefix, 'exp.config'))
 
+-- log the stats
+function log_stats()
+   statsLogger:write(json.encode (stats, { indent = true }))
+   statsLogger:write("\n\n")
+   statsLogger:flush()
+end
+
 -- training function
 function train(dataset)
    -- epoch tracker
@@ -337,6 +344,12 @@ function train(dataset)
                             -1, stats_state.old_output[i])
             )
          end
+
+         -- log the stats iff we will not log it again for test
+         if t + opt.batchSize <= dataset:size() then
+            log_stats()
+            tablex.clearall(stats)
+         end
       end
 
    end
@@ -418,12 +431,11 @@ end
 while true do
    -- train/test
    train(trainData)
-   test(testData)
+   -- make sure we haven't logged for the last time
+   assert(tablex.size(stats) > 0)
 
-   -- log the stats
-   statsLogger:write(json.encode (stats, { indent = true }))
-   statsLogger:write("\n\n")
-   statsLogger:flush()
+   test(testData)
+   log_stats()
 
    -- plot errors
    if opt.plot then
